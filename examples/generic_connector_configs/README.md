@@ -11,6 +11,7 @@ requires to authenticate.
 |HTTP Service|Config File|Example Usage|
 |---|---|---|
 |[GitHub API](https://developer.github.com/v3/)|[github_secretless.yml](./github_secretless.yml)|<ul><li>Edit the supplied configuration to get your [GitHub OAuth token](https://developer.github.com/v3/#oauth2-token-sent-in-a-header) from the correct provider/path.</li><li>Run Secretless with the supplied configuration</li><li>Query the GitHub API using `http_proxy=localhost:8081 curl api.github.com/{request}`</li></ul>|
+|[Splunk API](https://docs.splunk.com/Documentation/Splunk/8.0.2/Security/UseAuthTokens)|[splunk_secretless.yml](./splunk_secretless.yml)|<ul><li>Edit the supplied configuration to get your Splunk authentication token from the correct provider/path</li><li>Run Secretless with the supplied configuration</li><li>Query the Splunk API using `http_proxy=localhost:8081 curl {instance host name or IP address}:{management port}/{route}` - note that you do not preface your instance host name with `https://`; Secretless will ensure the final connection to the backend server uses SSL.</li></ul>|
 
 ## Contributing
 
