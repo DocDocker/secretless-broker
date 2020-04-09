@@ -9,14 +9,18 @@ import (
 	"os/exec"
 	"text/tabwriter"
 
-	"github.com/cyberark/secretless-broker/test/util/testutil"
+	_ "github.com/denisenkom/go-mssqldb" // register mssql driver
 )
 
 type dbConfig struct {
+	dbConfigParams
 	Host     string
 	Port     int
 	Username string
 	Password string
+}
+
+type dbConfigParams struct {
 	Database string
 	// This is in relation to what is generally referred to as Application Intent.
 	// It can only take 2 values, ReadWrite or ReadOnly.
@@ -26,15 +30,6 @@ type dbConfig struct {
 type dbQueryExecutor func(cfg dbConfig, query string) (string, error)
 
 const jdbcJARPath = "/secretless/test/util/jdbc/jdbc.jar"
-
-func defaultSecretlessDbConfig() dbConfig {
-	return dbConfig{
-		Host:     testutil.SecretlessHost,
-		Port:     testutil.SecretlessPort,
-		Username: "dummy",
-		Password: "dummy",
-	}
-}
 
 // runs queries using sqlcmd
 func sqlcmdExec(

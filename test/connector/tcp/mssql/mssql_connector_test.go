@@ -36,7 +36,7 @@ func RunConnectivityTests(t *testing.T, queryExec dbQueryExecutor) {
 		testInt := "1+1"
 		testString := "abc"
 
-		// Execute Query
+		// Execute query
 		out, err := queryExec(
 			defaultSecretlessDbConfig(),
 			fmt.Sprintf("SELECT %s AS sum, '%s' AS str", testInt, testString),
@@ -65,7 +65,7 @@ func RunConnectivityTests(t *testing.T, queryExec dbQueryExecutor) {
 			cfg.Host = "127.0.0.1"
 		}
 
-		// Execute Query
+		// Execute query
 		_, err = queryExec(
 			cfg,
 			"",
@@ -82,7 +82,7 @@ func RunConnectivityTests(t *testing.T, queryExec dbQueryExecutor) {
 		// https://docs.microsoft.com/en-us/sql/relational-databases/databases/tempdb-database?view=sql-server-ver15
 		cfg.Database = "tempdb"
 
-		// Execute Query
+		// Execute query
 		out, err := queryExec(
 			cfg,
 			"SELECT DB_NAME() AS [Current Database];", // returns current database
@@ -98,7 +98,7 @@ func RunConnectivityTests(t *testing.T, queryExec dbQueryExecutor) {
 		// non-existent database name
 		cfg.Database = "meow"
 
-		// Execute Query
+		// Execute query
 		_, err := queryExec(
 			cfg,
 			"",
@@ -114,48 +114,39 @@ func RunConnectivityTests(t *testing.T, queryExec dbQueryExecutor) {
 }
 
 const mockServerSecretlessPort = 2224
+const mockServerPort = 1434
+
 type testClientParams struct {
-	queryExec dbQueryExecutor
+	queryExec       dbQueryExecutor
 	applicationName string
-	serverName func(server string, port int) string
+	serverName      func(server string, port string) string
 }
 
 func TestClientParams(t *testing.T) {
-	// Setup mock-server listener
-	_ln, err := net.Listen("tcp", ":1434")
-	ln := _ln.(*net.TCPListener)
-	defer func() {
-		_ = ln.Close()
-	}()
-
-	if err != nil {
-		panic(err)
-	}
-
 	sqlcmdParamsTestClient := testClientParams{
-		queryExec:        sqlcmdExec,
+		queryExec:       sqlcmdExec,
 		applicationName: "SQLCMD",
-		serverName: func(server string, port int) string {
+		serverName: func(server string, port string) string {
 			return fmt.Sprintf(
-				"%s,%d",
+				"%s,%s",
 				server,
 				port,
 			)
 		},
 	}
 	gomssqlParamsTestClient := testClientParams{
-		queryExec:        gomssqlExec,
+		queryExec:       gomssqlExec,
 		applicationName: "go-mssqldb",
-		serverName: func(server string, port int) string {
+		serverName: func(server string, port string) string {
 			return server
 		},
 	}
 	pythonODBCParamsTestClient := testClientParams{
-		queryExec:        pythonODBCExec,
+		queryExec:       pythonODBCExec,
 		applicationName: "python3.5",
-		serverName: func(server string, port int) string {
+		serverName: func(server string, port string) string {
 			return fmt.Sprintf(
-				"%s,%d",
+				"%s,%s",
 				server,
 				port,
 			)
@@ -164,53 +155,97 @@ func TestClientParams(t *testing.T) {
 
 	type testcase struct {
 		description string
-		readonly bool
-		testClient testClientParams
+		readonly    bool
+		testClient  testClientParams
 	}
 
 	testCases := []testcase{
 		{
 			description: "sqlcmd: client params are propagated to the server",
-			readonly: false,
-			testClient: sqlcmdParamsTestClient,
+			readonly:    false,
+			testClient:  sqlcmdParamsTestClient,
 		},
 		{
 			description: "go-mssqldb: client params are propagated to the server",
-			readonly: false,
-			testClient: gomssqlParamsTestClient,
+			readonly:    false,
+			testClient:  gomssqlParamsTestClient,
 		},
 		{
 			description: "pythonODBC: client params are propagated to the server",
-			readonly: false,
-			testClient: pythonODBCParamsTestClient,
+			readonly:    false,
+			testClient:  pythonODBCParamsTestClient,
 		},
 		{
 			description: "sqlcmd: readonly application intent is propagated",
-			readonly: true,
-			testClient: sqlcmdParamsTestClient,
+			readonly:    true,
+			testClient:  sqlcmdParamsTestClient,
 		},
 		{
 			description: "go-mssqldb: readonly application intent is propagated",
-			readonly: true,
-			testClient: gomssqlParamsTestClient,
+			readonly:    true,
+			testClient:  gomssqlParamsTestClient,
 		},
 		{
 			description: "pythonODBC: readonly application intent is propagated",
-			readonly: true,
-			testClient: pythonODBCParamsTestClient,
+			readonly:    true,
+			testClient:  pythonODBCParamsTestClient,
 		},
 	}
+
+	// Create mock target
+	mt, err := newMockTarget("0")
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer func() {
+		_ = mt.close()
+	}()
 
 	for _, tc := range testCases {
 		t.Run(
 			tc.description,
 			func(t *testing.T) {
-				propagateParams(
-					t,
-					tc.readonly,
-					ln,
-					tc.testClient,
+				expectedUsername := "someuser"
+				expectedPassword := "somepassword"
+				expectedAppname := tc.testClient.applicationName
+				expectedDatabase := "random"
+
+				clientRequest := clientRequest{
+					params: dbConfigParams{
+						Database: expectedDatabase,
+						ReadOnly: tc.readonly,
+					},
+					query: "",
+				}
+				capture, port, err := clientRequest.proxyToMock(
+					tc.testClient.queryExec,
+					map[string][]byte{
+						"username": []byte(expectedUsername),
+						"password": []byte(expectedPassword),
+						"sslmode":  []byte("disable"),
+					},
+					mt,
 				)
+				if !assert.NoError(t, err) {
+					return
+				}
+				expectedServer := tc.testClient.serverName("127.0.0.1", port)
+
+				// 3. Test the captured login request
+
+				assert.Equal(t, capture.loginRequest.UserName, expectedUsername)
+				// Expected password needs to be mangled to match how it is transported to the server
+				assert.Equal(t, mssql.ManglePassword(expectedPassword), []byte(capture.loginRequest.Password))
+				assert.Equal(t, expectedDatabase, capture.loginRequest.Database)
+				assert.Equal(t, expectedServer, capture.loginRequest.ServerName)
+				assert.Equal(t, expectedAppname, capture.loginRequest.AppName)
+
+				// Conditionally assert on application intent
+				if tc.readonly {
+					assert.NotEqual(t, int(capture.loginRequest.TypeFlags&32), 0)
+				} else {
+					assert.Equal(t, int(capture.loginRequest.TypeFlags&32), 0)
+				}
 			},
 		)
 	}
@@ -231,7 +266,7 @@ func propagateParams(
 
 	// this is configurable because each client has it's own application name
 	expectedAppname := testClient.applicationName
-	expectedServer := testClient.serverName(testutil.SecretlessHost, mockServerSecretlessPort)
+	expectedServer := testClient.serverName(testutil.SecretlessHost, fmt.Sprintf("%d", mockServerSecretlessPort))
 
 	// 1. Make client connection
 
@@ -243,8 +278,10 @@ func propagateParams(
 				Port:     mockServerSecretlessPort,
 				Username: "dummy",
 				Password: "dummy",
-				Database: expectedDatabase,
-				ReadOnly: readonly,
+				dbConfigParams: dbConfigParams{
+					Database: expectedDatabase,
+					ReadOnly: readonly,
+				},
 			},
 			"",
 		)
@@ -315,8 +352,8 @@ func propagateParams(
 
 	// conditionally assert on application intent
 	if readonly {
-		assert.NotEqual(t, int(loginRequest.TypeFlags & 32), 0)
+		assert.NotEqual(t, int(loginRequest.TypeFlags&32), 0)
 	} else {
-		assert.Equal(t, int(loginRequest.TypeFlags & 32), 0)
+		assert.Equal(t, int(loginRequest.TypeFlags&32), 0)
 	}
 }
